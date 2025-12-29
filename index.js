@@ -174,7 +174,7 @@ app.post("/api/send-email", async (req, res) => {
 
     await transporter.sendMail({
       from: `"Product Inquiry" <${process.env.SMTP_USER}>`,
-      to: process.env.OWNER_EMAIL,
+      to: type === "product_inquiry" ? "sale@asianimportexport.com" : "info@asianimportexport.com",
       subject: emailSubject,
       text: textContent,
       html: htmlContent,
@@ -408,10 +408,10 @@ app.post("/api/send-invoice", async (req, res) => {
       html: customerEmailHTML,
     });
 
-    // Send email to admin
+    // Send email to sales (admin)
     await transporter.sendMail({
       from: `"Website Orders" <${process.env.SMTP_USER}>`,
-      to: process.env.OWNER_EMAIL,
+      to: "sale@asianimportexport.com",
       subject: `🔔 New Order Received - ${orderId} - $${total.toFixed(2)}`,
       html: adminEmailHTML,
     });

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "Bash(cat:*)",
+      "Bash(npm run build:*)",
+      "Bash(mv:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(rm:*)",
+      "Bash(node verify-sitemap.js:*)",
+      "Bash(node check-production-api.js:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
