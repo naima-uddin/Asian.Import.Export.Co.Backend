@@ -1281,6 +1281,7 @@ module.exports = {
   getProduct,
   createProduct,
   updateProduct,
+  setProductRecentPurchase,
   deleteProduct,
   listMedia,
   uploadMedia,

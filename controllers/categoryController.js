@@ -406,7 +406,7 @@ const getCategory = async (req, res) => {
  */
 const listPublicProducts = async (req, res) => {
   try {
-    const { search, category, subcategory, brand, pattern, isFeatured, all } = req.query;
+    const { search, category, subcategory, brand, pattern, isFeatured, isRecentPurchase, all } = req.query;
     const sortBy = String(req.query.sort || "newest");
     const isPriceSort = sortBy === "price-low-high" || sortBy === "price-high-low";
     const priceSortDirection = sortBy === "price-high-low" ? -1 : 1;
