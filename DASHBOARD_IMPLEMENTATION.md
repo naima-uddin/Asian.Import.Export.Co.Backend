@@ -194,7 +194,7 @@ export default function UserList() {
     setLoading(true);
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/users?page=${page}&limit=10&search=${search}`
+        `${process.env.https://asian-expo-impo-backend-dashbaord.vercel.appL}/api/users?page=${page}&limit=10&search=${search}`
       );
       const data = await response.json();
       
