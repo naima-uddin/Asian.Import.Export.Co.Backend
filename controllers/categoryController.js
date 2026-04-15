@@ -169,7 +169,6 @@ const mapPublicProduct = (product) => {
     dbId: product._id,
     name: product.name,
     slug: product.slug,
-    sku: product.sku,
     category: product.category?._id || product.category,
     categoryName: product.categoryName || product.mainCategory || "",
     categoryIcon: product.categoryIcon || "",
@@ -196,6 +195,7 @@ const mapPublicProduct = (product) => {
     userReviews: product.userReviews || [],
     tags: product.tags || [],
     isFeatured: product.isFeatured,
+    isRecentPurchase: Boolean(product.isRecentPurchase),
     isActive: product.isActive,
     metadata: product.metadata || {},
     createdAt: product.createdAt,
@@ -462,6 +462,10 @@ const listPublicProducts = async (req, res) => {
 
     if (isFeatured !== undefined) {
       andClauses.push({ isFeatured: String(isFeatured).toLowerCase() === "true" });
+    }
+
+    if (isRecentPurchase !== undefined) {
+      andClauses.push({ isRecentPurchase: String(isRecentPurchase).toLowerCase() === "true" });
     }
 
     const filter = andClauses.length === 1 ? andClauses[0] : { $and: andClauses };

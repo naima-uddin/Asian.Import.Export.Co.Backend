@@ -179,7 +179,6 @@ const normalizeProductPayload = (payload = {}) => {
     ...(resolvedSourceId !== undefined ? { sourceId: resolvedSourceId } : {}),
     name: String(payload.name || "").trim(),
     slug: String(payload.slug || slugifyText(payload.name)).trim(),
-    sku: String(payload.sku || "").trim(),
     category: payload.category,
     mainCategory: String(payload.mainCategory || payload.categoryName || "").trim(),
     subCategory: String(payload.subCategory || payload.subcategoryName || "").trim(),
@@ -337,7 +336,6 @@ const mapProduct = (product) => ({
   sourceId: product.sourceId,
   name: product.name,
   slug: product.slug,
-  sku: product.sku,
   category: product.category?._id || product.category,
   mainCategory: product.mainCategory || product.categoryName,
   subCategory: product.subCategory || product.subcategoryName,
@@ -362,6 +360,7 @@ const mapProduct = (product) => ({
   userReviews: product.userReviews || [],
   tags: product.tags || [],
   isFeatured: product.isFeatured,
+  isRecentPurchase: Boolean(product.isRecentPurchase),
   isActive: product.isActive,
   metadata: product.metadata || {},
   createdAt: product.createdAt,
@@ -418,6 +417,11 @@ const buildQuery = (query = {}) => {
 
   if (query.isActive !== undefined) {
     clauses.push({ isActive: query.isActive === "true" || query.isActive === true });
+  }
+
+  if (query.isRecentPurchase !== undefined) {
+    const value = String(query.isRecentPurchase).toLowerCase();
+    clauses.push({ isRecentPurchase: value === "true" || value === "1" || value === "yes" });
   }
 
   if (!clauses.length) return {};
@@ -871,6 +875,24 @@ const updateProduct = async (req, res) => {
 
     const payload = await syncProductCategoryFields(normalizeProductPayload(req.body));
     Object.assign(product, payload);
+    await product.save();
+
+    res.json({ success: true, product: mapProduct(product) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const setProductRecentPurchase = async (req, res) => {
+  try {
+    const product = await findProductByRouteId(req.params.productId);
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+
+    const value = req.body.isRecentPurchase;
+    product.isRecentPurchase =
+      value === true || String(value).toLowerCase() === "true";
     await product.save();
 
     res.json({ success: true, product: mapProduct(product) });
