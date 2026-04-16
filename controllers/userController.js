@@ -463,11 +463,19 @@ const createAuthorizedPerson = async (req, res) => {
       });
     }
 
-    const existingUser = await AuthorizedPerson.findOne({ email: normalizedEmail });
-    if (existingUser) {
+    const existingAuthorizedPerson = await AuthorizedPerson.findOne({ email: normalizedEmail });
+    if (existingAuthorizedPerson) {
       return res.status(400).json({
         success: false,
-        message: "Email already exists",
+        message: "Email already exists as an authorized person",
+      });
+    }
+
+    const existingCustomer = await User.findOne({ email: normalizedEmail });
+    if (existingCustomer) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is already registered to a customer account",
       });
     }
 
@@ -487,10 +495,27 @@ const createAuthorizedPerson = async (req, res) => {
       user: mapAuthorizedPayload(user),
     });
   } catch (error) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error("createAuthorizedPerson failed:", error, { body: req.body });
+    }
+
+    if (error.code === 11000) {
+      const message =
+        error.message.includes("firebaseUid")
+          ? "An authorized person with this Firebase UID already exists"
+          : "An account with this email already exists";
+      return res.status(400).json({
+        success: false,
+        message,
+        error: error.message,
+      });
+    }
+
+    const message = error.message || "Failed to create authorized person";
     return res.status(500).json({
       success: false,
-      message: "Failed to create authorized person",
-      error: error.message,
+      message,
+      error: message,
     });
   }
 };

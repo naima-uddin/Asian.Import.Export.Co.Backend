@@ -8,7 +8,8 @@
     "build": "echo \"Backend build complete\"",
     "test": "echo \"Error: no test specified\" && exit 1",
     "backfill:product-source-id": "node scripts/backfillProductSourceIds.js",
-    "set:category-order": "node scripts/setCategoryDisplayOrder.js"
+    "set:category-order": "node scripts/setCategoryDisplayOrder.js",
+    "fix:authorized-index": "node scripts/fixAuthorizedPersonIndexes.js"
   },
   "keywords": [],
   "author": "",

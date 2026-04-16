@@ -4,9 +4,12 @@ const authorizedPersonSchema = new mongoose.Schema(
   {
     firebaseUid: {
       type: String,
-      unique: true,
-      sparse: true,
       trim: true,
+      default: undefined,
+      index: {
+        unique: true,
+        partialFilterExpression: { firebaseUid: { $type: "string" } },
+      },
     },
     fullName: {
       type: String,
@@ -44,7 +47,6 @@ const authorizedPersonSchema = new mongoose.Schema(
 );
 
 authorizedPersonSchema.index({ email: 1 });
-authorizedPersonSchema.index({ firebaseUid: 1 });
 
 const AuthorizedPerson = mongoose.model("AuthorizedPerson", authorizedPersonSchema);
 
