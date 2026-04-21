@@ -12,7 +12,7 @@ This backend is an Express + MongoDB API that supports:
 - Order invoice email delivery
 
 Base URL examples:
-- Local: http://localhost:5000
+- Local: https://asian-import-export-co-backend.vercel.app
 - Production: your deployed backend domain
 
 ## 2) Tech Stack
@@ -289,19 +289,19 @@ Sends:
 ## 10) cURL Examples
 
 Register customer:
-curl -X POST "http://localhost:5000/api/users/register" -H "Content-Type: application/json" -d "{\"firebaseUid\":\"uid_123\",\"email\":\"john@example.com\",\"fullName\":\"John Doe\"}"
+curl -X POST "https://asian-import-export-co-backend.vercel.app/api/users/register" -H "Content-Type: application/json" -d "{\"firebaseUid\":\"uid_123\",\"email\":\"john@example.com\",\"fullName\":\"John Doe\"}"
 
 Get customers (admin token required):
-curl "http://localhost:5000/api/users?page=1&limit=10" -H "Authorization: Bearer <token>"
+curl "https://asian-import-export-co-backend.vercel.app/api/users?page=1&limit=10" -H "Authorization: Bearer <token>"
 
 Create authorized person (admin token required):
-curl -X POST "http://localhost:5000/api/users/authorized-persons" -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d "{\"fullName\":\"Manager One\",\"email\":\"manager@example.com\",\"password\":\"StrongPass123\",\"role\":\"moderator\"}"
+curl -X POST "https://asian-import-export-co-backend.vercel.app/api/users/authorized-persons" -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d "{\"fullName\":\"Manager One\",\"email\":\"manager@example.com\",\"password\":\"StrongPass123\",\"role\":\"moderator\"}"
 
 Update authorized person by Mongo id:
-curl -X PUT "http://localhost:5000/api/users/authorized-persons/67f0abc1234def5678901234" -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d "{\"fullName\":\"Manager Updated\",\"password\":\"NewStrongPass123\"}"
+curl -X PUT "https://asian-import-export-co-backend.vercel.app/api/users/authorized-persons/67f0abc1234def5678901234" -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d "{\"fullName\":\"Manager Updated\",\"password\":\"NewStrongPass123\"}"
 
 Delete authorized person by Mongo id:
-curl -X DELETE "http://localhost:5000/api/users/authorized-persons/67f0abc1234def5678901234" -H "Authorization: Bearer <token>"
+curl -X DELETE "https://asian-import-export-co-backend.vercel.app/api/users/authorized-persons/67f0abc1234def5678901234" -H "Authorization: Bearer <token>"
 
 ## 11) Current Notes
 
