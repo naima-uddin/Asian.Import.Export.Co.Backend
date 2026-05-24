@@ -1,6 +1,7 @@
 const SiteSettings = require("../models/SiteSettings");
 
-const cleanText = (value) => (value === undefined || value === null ? undefined : String(value).trim());
+const cleanText = (value) =>
+  value === undefined || value === null ? undefined : String(value).trim();
 
 const defaultSiteSettings = () => ({
   contact: {
@@ -16,26 +17,34 @@ const normalizeSettingsPayload = (payload = {}) => ({
     footerWhatsAppNumber: cleanText(payload?.contact?.footerWhatsAppNumber),
     footerWhatsAppDisplay: cleanText(payload?.contact?.footerWhatsAppDisplay),
     floatingWhatsAppNumber: cleanText(payload?.contact?.floatingWhatsAppNumber),
-    floatingWhatsAppDisplay: cleanText(payload?.contact?.floatingWhatsAppDisplay),
+    floatingWhatsAppDisplay: cleanText(
+      payload?.contact?.floatingWhatsAppDisplay,
+    ),
   },
 });
 
 const mergeSettings = (source = {}, fallback = defaultSiteSettings()) => ({
   contact: {
     footerWhatsAppNumber:
-      source?.contact?.footerWhatsAppNumber || fallback.contact.footerWhatsAppNumber,
+      source?.contact?.footerWhatsAppNumber ||
+      fallback.contact.footerWhatsAppNumber,
     footerWhatsAppDisplay:
-      source?.contact?.footerWhatsAppDisplay || fallback.contact.footerWhatsAppDisplay,
+      source?.contact?.footerWhatsAppDisplay ||
+      fallback.contact.footerWhatsAppDisplay,
     floatingWhatsAppNumber:
-      source?.contact?.floatingWhatsAppNumber || fallback.contact.floatingWhatsAppNumber,
+      source?.contact?.floatingWhatsAppNumber ||
+      fallback.contact.floatingWhatsAppNumber,
     floatingWhatsAppDisplay:
-      source?.contact?.floatingWhatsAppDisplay || fallback.contact.floatingWhatsAppDisplay,
+      source?.contact?.floatingWhatsAppDisplay ||
+      fallback.contact.floatingWhatsAppDisplay,
   },
 });
 
 const getSiteSettings = async (_req, res) => {
   try {
-    const latestSettings = await SiteSettings.findOne().sort({ updatedAt: -1 }).lean();
+    const latestSettings = await SiteSettings.findOne()
+      .sort({ updatedAt: -1 })
+      .lean();
     return res.status(200).json({
       success: true,
       settings: mergeSettings(latestSettings),
@@ -55,7 +64,10 @@ const updateSiteSettings = async (req, res) => {
     const payload = normalizeSettingsPayload(req.body);
     const existing = await SiteSettings.findOne().sort({ updatedAt: -1 });
 
-    const nextSettings = mergeSettings(payload, existing ? existing.toObject() : defaultSiteSettings());
+    const nextSettings = mergeSettings(
+      payload,
+      existing ? existing.toObject() : defaultSiteSettings(),
+    );
 
     const updatedSettings = existing
       ? Object.assign(existing, nextSettings)

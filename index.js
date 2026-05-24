@@ -14,25 +14,42 @@ const siteSettingsRoutes = require("./routes/siteSettingsRoutes");
 const app = express();
 
 const GENERAL_CONTACT_EMAIL =
-  process.env.GENERAL_CONTACT_EMAIL ||
-  "info@asianimportexport.com";
-const SALES_EMAIL = process.env.SALES_EMAIL || process.env.SMTP_USER || "sale@asianimportexport.com";
+  process.env.GENERAL_CONTACT_EMAIL || "info@asianimportexport.com";
+const SALES_EMAIL =
+  process.env.SALES_EMAIL ||
+  process.env.SMTP_USER ||
+  "sale@asianimportexport.com";
 
 const resolveSmtpHost = (rawHost, userEmail) => {
-  const host = String(rawHost || "").trim().toLowerCase();
-  const domain = String(userEmail || "").split("@")[1]?.toLowerCase() || "";
+  const host = String(rawHost || "")
+    .trim()
+    .toLowerCase();
+  const domain =
+    String(userEmail || "")
+      .split("@")[1]
+      ?.toLowerCase() || "";
 
   if (domain === "gmail.com") return "smtp.gmail.com";
-  if (domain === "outlook.com" || domain === "hotmail.com" || domain === "live.com") {
+  if (
+    domain === "outlook.com" ||
+    domain === "hotmail.com" ||
+    domain === "live.com"
+  ) {
     return "smtp.office365.com";
   }
 
   if (!host || host.includes("@")) return "";
 
   // If only the website domain is given (e.g. asianimportexport.com), convert to a usable SMTP host.
-  const looksLikePlainDomain = host.includes(".") && !host.startsWith("smtp.") && !host.startsWith("mail.");
+  const looksLikePlainDomain =
+    host.includes(".") &&
+    !host.startsWith("smtp.") &&
+    !host.startsWith("mail.");
   if (looksLikePlainDomain) {
-    if (host === "asianimportexport.com" || domain === "asianimportexport.com") {
+    if (
+      host === "asianimportexport.com" ||
+      domain === "asianimportexport.com"
+    ) {
       return "mail.asianimportexport.com";
     }
     return `smtp.${host}`;
@@ -42,7 +59,9 @@ const resolveSmtpHost = (rawHost, userEmail) => {
 };
 
 const createMailTransporter = () => {
-  const user = String(process.env.SMTP_USER || process.env.OWNER_EMAIL || "").trim();
+  const user = String(
+    process.env.SMTP_USER || process.env.OWNER_EMAIL || "",
+  ).trim();
   const rawPassword = String(process.env.SMTP_PASSWORD || "");
   let pass = rawPassword.trim();
   const host = resolveSmtpHost(process.env.SMTP_HOST, user);
@@ -78,7 +97,7 @@ app.use(
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
-  })
+  }),
 );
 app.use(express.json());
 
@@ -205,7 +224,7 @@ app.post("/api/send-email", async (req, res) => {
         ================
               `;
 
-        htmlContent = `
+      htmlContent = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
           <h2 style="color: #e67e22; border-bottom: 2px solid #e67e22; padding-bottom: 5px;">
             GENERAL INQUIRY
@@ -246,7 +265,9 @@ app.post("/api/send-email", async (req, res) => {
     }
 
     const isProductInquiry = type === "product_inquiry";
-    const senderAddress = isProductInquiry ? SALES_EMAIL : GENERAL_CONTACT_EMAIL;
+    const senderAddress = isProductInquiry
+      ? SALES_EMAIL
+      : GENERAL_CONTACT_EMAIL;
     const adminRecipient = isProductInquiry
       ? SALES_EMAIL
       : GENERAL_CONTACT_EMAIL || senderAddress;
@@ -261,7 +282,8 @@ app.post("/api/send-email", async (req, res) => {
     });
 
     if (!isProductInquiry && email) {
-      const customerAckSubject = "We received your inquiry - Asian Import Export Co";
+      const customerAckSubject =
+        "We received your inquiry - Asian Import Export Co";
       const customerAckText = `Hello ${name || "Customer"},\n\nThank you for contacting Asian Import Export Co. We have received your inquiry and our team will reply soon.\n\nYour message:\n${message || ""}\n\nBest regards,\nAsian Import Export Co`;
       const customerAckHtml = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
@@ -294,7 +316,8 @@ app.post("/api/send-email", async (req, res) => {
 
 // Invoice email endpoint for cart orders
 app.post("/api/send-invoice", async (req, res) => {
-  const { customer, items, subtotal, total, orderDate, paymentMethod } = req.body;
+  const { customer, items, subtotal, total, orderDate, paymentMethod } =
+    req.body;
 
   const transporter = createMailTransporter();
 
@@ -319,7 +342,7 @@ app.post("/api/send-invoice", async (req, res) => {
         <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${parseFloat(item.price).toFixed(2)}</td>
         <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${(parseFloat(item.price) * item.quantity).toFixed(2)}</td>
       </tr>
-    `
+    `,
       )
       .join("");
 
@@ -359,12 +382,16 @@ app.post("/api/send-invoice", async (req, res) => {
               <td style="padding: 5px 0; vertical-align: top;"><strong>Address:</strong></td>
               <td style="padding: 5px 0;">${customer.address}<br>${[customer.city, customer.zone, customer.zipCode].filter(Boolean).join(", ")}</td>
             </tr>
-            ${customer.notes ? `
+            ${
+              customer.notes
+                ? `
             <tr>
               <td style="padding: 5px 0; vertical-align: top;"><strong>Notes:</strong></td>
               <td style="padding: 5px 0;">${customer.notes}</td>
             </tr>
-            ` : ""}
+            `
+                : ""
+            }
           </table>
 
           <h3 style="color: #0d9488; border-bottom: 2px solid #14b8a6; padding-bottom: 10px;">Order Items</h3>
@@ -395,9 +422,10 @@ app.post("/api/send-invoice", async (req, res) => {
           <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 25px 0;">
             <h4 style="margin: 0 0 10px 0; color: #92400e;">Next Steps</h4>
             <p style="margin: 5px 0; color: #78350f;">
-              ${paymentMethod === "credit-card" 
-                ? "Our team will contact you shortly with payment instructions for your credit card payment."
-                : "Our team will contact you shortly with bank transfer details and payment instructions."
+              ${
+                paymentMethod === "credit-card"
+                  ? "Our team will contact you shortly with payment instructions for your credit card payment."
+                  : "Our team will contact you shortly with bank transfer details and payment instructions."
               }
             </p>
             <p style="margin: 10px 0 0 0; color: #78350f;">
@@ -452,12 +480,16 @@ app.post("/api/send-invoice", async (req, res) => {
               <td style="padding: 5px 0; vertical-align: top;"><strong>Shipping Address:</strong></td>
               <td style="padding: 5px 0;">${customer.address}<br>${[customer.city, customer.zone, customer.zipCode].filter(Boolean).join(", ")}</td>
             </tr>
-            ${customer.notes ? `
+            ${
+              customer.notes
+                ? `
             <tr>
               <td style="padding: 5px 0; vertical-align: top;"><strong>Customer Notes:</strong></td>
               <td style="padding: 5px 0; background: #fffbeb; padding: 10px; border-radius: 4px;">${customer.notes}</td>
             </tr>
-            ` : ""}
+            `
+                : ""
+            }
           </table>
 
           <h3 style="color: #dc2626; border-bottom: 2px solid #ef4444; padding-bottom: 10px;">Order Items</h3>
@@ -513,10 +545,10 @@ app.post("/api/send-invoice", async (req, res) => {
       html: adminEmailHTML,
     });
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       orderId,
-      message: "Invoice sent successfully" 
+      message: "Invoice sent successfully",
     });
   } catch (error) {
     console.error("Error sending invoice:", error);

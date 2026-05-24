@@ -7,7 +7,7 @@ const contactSchema = new mongoose.Schema(
     floatingWhatsAppNumber: { type: String, default: "" },
     floatingWhatsAppDisplay: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const siteSettingsSchema = new mongoose.Schema(
@@ -17,7 +17,9 @@ const siteSettingsSchema = new mongoose.Schema(
       default: () => ({}),
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
-module.exports = mongoose.models.SiteSettings || mongoose.model("SiteSettings", siteSettingsSchema);
+module.exports =
+  mongoose.models.SiteSettings ||
+  mongoose.model("SiteSettings", siteSettingsSchema);
