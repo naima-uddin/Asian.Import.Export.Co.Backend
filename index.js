@@ -9,6 +9,7 @@ const orderFlowRoutes = require("./routes/orderFlowRoutes");
 const addressRoutes = require("./routes/addressRoutes");
 const catalogRoutes = require("./routes/catalogRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
+const siteSettingsRoutes = require("./routes/siteSettingsRoutes");
 
 const app = express();
 
@@ -87,6 +88,7 @@ app.use("/api", orderFlowRoutes);
 app.use("/api/addresses", addressRoutes);
 app.use("/api/catalog", catalogRoutes);
 app.use("/api/categories", categoryRoutes);
+app.use("/api/site-settings", siteSettingsRoutes);
 
 // Email endpoint
 app.post("/api/send-email", async (req, res) => {
