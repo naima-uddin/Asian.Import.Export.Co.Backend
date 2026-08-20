@@ -78,10 +78,11 @@ const invoiceSchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
+    // Optional: invoices generated from guest inquiries have no linked account.
     customer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      default: null,
       index: true,
     },
     customerSnapshot: {

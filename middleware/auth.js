@@ -127,6 +127,57 @@ const authenticate = async (req, res, next) => {
   }
 };
 
+// Resolves the logged-in user when a valid token is present, but never rejects
+// the request when it is missing/invalid. Used for guest-friendly endpoints
+// (e.g. checkout) where both logged-in customers and guests are allowed.
+const optionalAuthenticate = async (req, res, next) => {
+  try {
+    const token = getBearerToken(req.headers.authorization);
+
+    if (!token) {
+      req.authUser = null;
+      req.decodedToken = null;
+      return next();
+    }
+
+    let dbUser = null;
+    let decodedToken = null;
+
+    try {
+      const authorizedResult = await verifyAuthorizedJwt(token);
+      dbUser = authorizedResult.authUser;
+      decodedToken = authorizedResult.decodedToken;
+    } catch (_jwtError) {
+      if (isFirebaseAdminReady()) {
+        decodedToken = await admin.auth().verifyIdToken(token);
+      } else {
+        decodedToken = await verifyTokenWithIdentityToolkit(token);
+      }
+
+      const authorizedUser = await AuthorizedPerson.findOne({
+        firebaseUid: decodedToken.uid,
+      });
+      const customerUser = !authorizedUser
+        ? await User.findOne({ firebaseUid: decodedToken.uid })
+        : null;
+      dbUser = authorizedUser || customerUser;
+    }
+
+    if (dbUser && dbUser.role === "user") {
+      dbUser.role = "customer";
+    }
+
+    req.authUser = dbUser || null;
+    req.decodedToken = decodedToken;
+    next();
+  } catch (_error) {
+    // Any verification failure simply falls back to a guest request.
+    req.authUser = null;
+    req.decodedToken = null;
+    next();
+  }
+};
+
 const requireAdmin = (req, res, next) => {
   if (!req.authUser || req.authUser.role !== "admin") {
     return res.status(403).json({
@@ -151,6 +202,7 @@ const requireStaff = (req, res, next) => {
 
 module.exports = {
   authenticate,
+  optionalAuthenticate,
   requireAdmin,
   requireStaff,
 };

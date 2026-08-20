@@ -916,6 +916,7 @@ const mapInquiry = (inquiry) => ({
   id: inquiry._id,
   inquiryNumber: inquiry.inquiryNumber,
   customerId: inquiry.customer,
+  isGuest: Boolean(inquiry.isGuest),
   customer: inquiry.customerSnapshot,
   items: inquiry.items,
   subtotal: inquiry.subtotal,
@@ -965,13 +966,18 @@ const mapInvoice = (invoice) => ({
 
 const placeOrderInquiry = async (req, res) => {
   try {
-    const authUser = req.authUser;
-    if (!authUser || authUser.role !== "customer") {
+    const authUser = req.authUser || null;
+
+    // Guest checkout is allowed. Only block logged-in non-customer accounts
+    // (admin/moderator) from placing orders through their own session.
+    if (authUser && authUser.role !== "customer") {
       return res.status(403).json({
         success: false,
-        message: "Only customers can place orders",
+        message: "Admin/Moderator accounts cannot place orders",
       });
     }
+
+    const isGuest = !authUser;
 
     const { customer, items, paymentMethod, currency = "USD" } = req.body;
 
@@ -984,7 +990,9 @@ const placeOrderInquiry = async (req, res) => {
     }
 
     const customerSnapshot = normalizeCustomerSnapshot({ customer, authUser });
-    const accountEmail = sanitizeText(authUser.email || "", "").toLowerCase();
+    // For logged-in customers, keep the inquiry email aligned with the account
+    // email. Guests provide their contact email directly on the form.
+    const accountEmail = sanitizeText(authUser?.email || "", "").toLowerCase();
     if (accountEmail) {
       customerSnapshot.email = accountEmail;
     }
@@ -1002,7 +1010,8 @@ const placeOrderInquiry = async (req, res) => {
 
     const inquiry = await Inquiry.create({
       inquiryNumber: generateCode("INQ"),
-      customer: authUser._id,
+      customer: authUser?._id || null,
+      isGuest,
       customerSnapshot,
       items: lineItems,
       subtotal,

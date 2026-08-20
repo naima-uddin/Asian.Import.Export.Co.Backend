@@ -51,10 +51,16 @@ const inquirySchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
+    // Optional: guest checkouts have no linked account.
     customer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      default: null,
+      index: true,
+    },
+    isGuest: {
+      type: Boolean,
+      default: false,
       index: true,
     },
     customerSnapshot: {

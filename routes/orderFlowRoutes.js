@@ -11,11 +11,18 @@ const {
   deleteInvoice,
   downloadInvoicePdf,
 } = require("../controllers/orderFlowController");
-const { authenticate, requireAdmin, requireStaff } = require("../middleware/auth");
+const {
+  authenticate,
+  optionalAuthenticate,
+  requireAdmin,
+  requireStaff,
+} = require("../middleware/auth");
 
 const router = express.Router();
 
-router.post("/inquiries/place-order", authenticate, placeOrderInquiry);
+// Guest checkout allowed: logged-in customers are recognised via the token,
+// while guests without a token can still place an inquiry.
+router.post("/inquiries/place-order", optionalAuthenticate, placeOrderInquiry);
 router.get("/inquiries/my", authenticate, getMyInquiries);
 router.get("/inquiries", authenticate, requireStaff, getAllInquiries);
 router.patch("/inquiries/:inquiryId/status", authenticate, requireStaff, updateInquiryStatus);
