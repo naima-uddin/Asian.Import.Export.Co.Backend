@@ -7,21 +7,21 @@
  *   --download-only
  *       Download every ORIGINAL Cloudinary image into public/uploads/ at a
  *       DETERMINISTIC path and write a manifest. Does NOT touch the database.
- *       Use this NOW (before the VPS/domain is live) so the files are ready and
- *       can be committed to git. Safe: the live site keeps using Cloudinary.
+ *       Use this to fetch the files first so they are ready and can be committed
+ *       to git. Safe: the DB is untouched, so nothing changes for consumers yet.
  *
  *   --rewrite-db
  *       Read the manifest produced above and rewrite the DB URLs/publicIds to
- *       `${ASSET_BASE_URL}/uploads/...`. Does NOT re-download. Run this LATER,
- *       once api.asianimportexport.com is live and serving /uploads.
+ *       host-agnostic relative paths (`/uploads/...`). Does NOT re-download.
+ *       The frontend prepends its configured backend URL, so images come from
+ *       whatever backend it points at — no hardcoded domain.
  *
  *   (no mode flag)  -> one-shot: download (random names) AND rewrite the DB in a
- *       single pass. Use on the live VPS when you want to do everything at once.
+ *       single pass. Use when you want to do everything at once.
  *
  * Extra flags:  --dry (preview, no writes)   --all (migrate any remote URL, not just Cloudinary)
  *
  * Requires in .env:  MONGODB_URI
- *   --rewrite-db / one-shot also need:  ASSET_BASE_URL (e.g. https://api.asianimportexport.com)
  *   Uses if present:  CLOUDINARY_CLOUD_NAME (to rebuild original-quality URLs)
  *
  * Safe to re-run. Idempotent.
@@ -49,7 +49,6 @@ const REWRITE_DB = process.argv.includes("--rewrite-db");
 const MODE = DOWNLOAD_ONLY ? "download" : REWRITE_DB ? "rewrite" : "oneshot";
 const MAX_RETRIES = 3;
 
-const ASSET_BASE = localStorage.getAssetBaseUrl();
 const CLOUD_NAME = String(process.env.CLOUDINARY_CLOUD_NAME || "").trim();
 const MANIFEST_PATH = path.join(localStorage.UPLOADS_ROOT, "migration-manifest.json");
 const MIGRATION_FOLDER = "catalog";
@@ -67,7 +66,11 @@ const stats = {
 };
 
 const isRemote = (u = "") => /^https?:\/\//i.test(String(u).trim());
-const isAlreadyLocal = (u = "") => String(u || "").trim().startsWith(`${ASSET_BASE}/uploads/`);
+// Local = our host-agnostic relative path, or any URL already pointing at /uploads/.
+const isAlreadyLocal = (u = "") => {
+  const url = String(u || "").trim();
+  return url.startsWith("/uploads/") || /^https?:\/\/[^/]+\/uploads\//i.test(url);
+};
 const isCloudinary = (u = "") => /cloudinary\.com/i.test(String(u || ""));
 
 const needsMigration = (u = "") => {
@@ -267,7 +270,7 @@ const runDownloadOnly = async ({ media, products, categories }) => {
     await fsp.writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2));
     console.log(`\nManifest written: ${MANIFEST_PATH} (${Object.keys(manifest.entries).length} entries)`);
   }
-  console.log("\nDB was NOT modified. Files are in public/uploads/ — commit them, then run --rewrite-db once the VPS is live.");
+  console.log("\nDB was NOT modified. Files are in public/uploads/ — commit them, then run --rewrite-db to point the DB at them.");
 };
 
 // =================== MODE: rewrite-db ===================
@@ -300,7 +303,7 @@ const applyFromManifest = (asset, entries) => {
 const runRewriteDb = async ({ media, products, categories }) => {
   const entries = await loadManifest();
   console.log(`\nManifest entries: ${Object.keys(entries).length}`);
-  console.log(`Rewriting DB URLs to base: ${ASSET_BASE}`);
+  console.log(`Rewriting DB URLs to relative /uploads/... (host-agnostic)`);
 
   for (const doc of media) {
     const fakeAsset = { url: doc.url || doc.optimizedUrl, publicId: doc.publicId, format: doc.format, optimizedUrl: doc.optimizedUrl };
@@ -478,7 +481,7 @@ const run = async () => {
   }
   console.log("=".repeat(64));
   console.log(`Mode            : ${MODE}${DRY_RUN ? " (DRY RUN)" : ""}`);
-  console.log(`Target base URL : ${ASSET_BASE}`);
+  console.log(`DB image URLs   : relative /uploads/... (host-agnostic)`);
   console.log(`Cloudinary cloud: ${CLOUD_NAME || "(unknown)"}`);
   console.log(`Matching        : ${MIGRATE_ALL ? "ALL remote URLs" : "Cloudinary URLs only"}`);
   console.log(`Uploads root    : ${localStorage.UPLOADS_ROOT}`);

@@ -5,22 +5,10 @@ const crypto = require("crypto");
 
 // Root folder where all uploaded images live: backend/public/uploads.
 // Committed to git so images deploy with the code, and served statically at
-// `${ASSET_BASE_URL}/uploads/...` (see index.js).
+// `/uploads/...` (see index.js).
 const UPLOADS_ROOT = path.resolve(__dirname, "..", "public", "uploads");
 
 const DEFAULT_FOLDER = process.env.LOCAL_UPLOAD_FOLDER || "catalog";
-
-// Absolute, public base URL of THIS backend (the VPS), used to build image URLs
-// that are stored in the database and rendered by the frontend.
-// e.g. https://api.asianimportexport.com
-const getAssetBaseUrl = () => {
-  const raw =
-    process.env.ASSET_BASE_URL ||
-    process.env.PUBLIC_BACKEND_URL ||
-    process.env.BACKEND_URL ||
-    `http://localhost:${process.env.PORT || 5000}`;
-  return String(raw).trim().replace(/\/+$/, "");
-};
 
 // Map a common mime type to a file extension (fallback when the filename has none).
 const extFromMime = (mime = "") => {
@@ -55,11 +43,13 @@ const resolveExtension = (originalname = "", mimetype = "") => {
   return ".jpg";
 };
 
-// Build the public URL for a stored publicId (relative path incl. extension).
+// Build the RELATIVE public URL for a stored publicId. We intentionally keep it
+// host-agnostic (`/uploads/...`) so it is not tied to any domain;
+// the frontend prepends whatever backend URL it is configured with.
 const buildUrlFromPublicId = (publicId = "") => {
   const clean = String(publicId || "").replace(/^\/+/, "");
   if (!clean) return "";
-  return `${getAssetBaseUrl()}/uploads/${clean}`;
+  return `/uploads/${clean}`;
 };
 
 // Resolve a publicId to an absolute path on disk, guarding against path traversal.
@@ -73,7 +63,7 @@ const resolveDiskPath = (publicId = "") => {
 };
 
 /**
- * Persist a buffer to the VPS disk.
+ * Persist a buffer to the backend's local disk (public/uploads).
  * Returns a Cloudinary-like descriptor so callers barely change.
  * `public_id` is the relative path (incl. extension), which is also how we delete later.
  */
@@ -162,7 +152,6 @@ const ensureUploadsRoot = () => {
 module.exports = {
   UPLOADS_ROOT,
   DEFAULT_FOLDER,
-  getAssetBaseUrl,
   buildUrlFromPublicId,
   resolveDiskPath,
   saveBuffer,

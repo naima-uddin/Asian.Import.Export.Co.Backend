@@ -102,8 +102,9 @@ app.use(
 );
 app.use(express.json());
 
-// Serve uploaded images from the VPS disk (images now live here, not Cloudinary).
-// Public URL: `${ASSET_BASE_URL}/uploads/<folder>/<file>`
+// Serve uploaded images from backend/public/uploads (images live here, not Cloudinary).
+// Served at the relative path `/uploads/<folder>/<file>`; the frontend prepends
+// its configured backend URL, so there is no hardcoded host.
 ensureUploadsRoot();
 app.use(
   "/uploads",

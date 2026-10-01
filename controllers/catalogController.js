@@ -83,10 +83,20 @@ const normalizeReviews = (reviews = []) =>
       }))
     : [];
 
+// Keep stored image URLs host-agnostic: if a value is an absolute URL that points
+// at our own `/uploads/...` path, strip the host so only the relative path is saved.
+// External URLs (e.g. anything not under /uploads) are left untouched.
+const relativizeLocalUrl = (value = "") => {
+  const url = String(value || "").trim();
+  if (!url) return "";
+  const match = url.match(/^https?:\/\/[^/]+(\/uploads\/.+)$/i);
+  return match ? match[1] : url;
+};
+
 const normalizeAsset = (asset = {}) => {
   if (typeof asset === "string") {
     return {
-      url: asset,
+      url: relativizeLocalUrl(asset),
       publicId: "",
       alt: "",
       width: 0,
@@ -97,7 +107,7 @@ const normalizeAsset = (asset = {}) => {
   }
 
   return {
-    url: asset?.url ? String(asset.url) : "",
+    url: asset?.url ? relativizeLocalUrl(asset.url) : "",
     publicId: asset?.publicId ? String(asset.publicId) : "",
     alt: asset?.alt ? String(asset.alt) : "",
     width: normalizeNumber(asset?.width ?? 0),
@@ -279,11 +289,11 @@ const normalizeSubcategories = (subcategories) => {
         displayOrder: normalizeNumber(subcategory.displayOrder ?? index),
         isActive: subcategory.isActive === undefined ? true : Boolean(subcategory.isActive),
         image: {
-          url: String(
+          url: relativizeLocalUrl(
             typeof subcategory.image === "string"
               ? subcategory.image
               : subcategory.image?.url || ""
-          ).trim(),
+          ),
           publicId: String(subcategory.image?.publicId || "").trim(),
         },
       };
@@ -300,11 +310,11 @@ const normalizeCategoryPayload = (payload = {}) => ({
   displayOrder: normalizeNumber(payload.displayOrder ?? 0),
   isActive: payload.isActive === undefined ? true : Boolean(payload.isActive),
   image: {
-    url: String(
+    url: relativizeLocalUrl(
       typeof payload.image === "string"
         ? payload.image
         : payload.image?.url || payload.heroImage || ""
-    ).trim(),
+    ),
     publicId: String(payload.image?.publicId || payload.heroImagePublicId || "").trim(),
   },
   subcategories: normalizeSubcategories(payload.subcategories),
@@ -481,7 +491,7 @@ const findProductByRouteId = async (routeId, { populate = false } = {}) => {
   return query;
 };
 
-// Store an uploaded buffer on the VPS disk and return a Cloudinary-shaped descriptor.
+// Store an uploaded buffer on the backend's local disk and return a Cloudinary-shaped descriptor.
 const storeBufferToDisk = (buffer, filename, mimetype = "") =>
   localStorage.saveBuffer(buffer, { originalname: filename, mimetype });
 
@@ -1001,7 +1011,7 @@ const uploadMediaFromUrl = async (req, res) => {
     // Download URL to buffer
     const { buffer, filename, mimetype } = await downloadUrlToBuffer(imageUrl);
 
-    // Store buffer on the VPS disk
+    // Store buffer on the backend's local disk
     const uploaded = await storeBufferToDisk(buffer, filename, mimetype);
     const metadata = req.body.metadata ? JSON.parse(req.body.metadata) : {};
 

@@ -50,7 +50,7 @@ const uploadCatalogAsset = async (asset, fallbackName = "") => {
   const localPath = getFrontendAssetPath(sourcePath);
 
   try {
-    // Copy the bundled asset onto the VPS disk byte-for-byte (no re-encoding).
+    // Copy the bundled asset onto the backend's local disk byte-for-byte (no re-encoding).
     const uploaded = await localStorage.saveLocalFile(localPath, {
       originalname: fallbackName || path.basename(localPath),
     });
