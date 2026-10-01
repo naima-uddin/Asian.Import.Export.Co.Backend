@@ -8,7 +8,7 @@ const url = require("url");
 const Category = require("../models/Category");
 const Product = require("../models/Product");
 const MediaAsset = require("../models/MediaAsset");
-const { cloudinary, buildOptimizedUrl } = require("../config/cloudinary");
+const localStorage = require("../config/localStorage");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -119,16 +119,12 @@ const uploadCatalogAsset = async (asset, fallbackName = "") => {
 
   try {
     await fs.access(localPath);
-    const uploaded = await cloudinary.uploader.upload(localPath, {
-      folder: process.env.CLOUDINARY_CATALOG_FOLDER || "asian-import-export/catalog",
-      resource_type: "image",
-      overwrite: false,
-      quality: "auto:good",
-      fetch_format: "auto",
+    const uploaded = await localStorage.saveLocalFile(localPath, {
+      originalname: fallbackName || path.basename(localPath),
     });
 
     return {
-      url: buildOptimizedUrl(uploaded.public_id, uploaded.resource_type || "image"),
+      url: uploaded.url,
       publicId: uploaded.public_id,
       alt: fallbackName,
       width: uploaded.width || 0,
@@ -162,7 +158,7 @@ const upsertImportedMediaAsset = async ({
         bytes: asset.bytes || 0,
         width: asset.width || 0,
         height: asset.height || 0,
-        folder: process.env.CLOUDINARY_CATALOG_FOLDER || "asian-import-export/catalog",
+        folder: localStorage.DEFAULT_FOLDER,
         relatedType,
         relatedId: String(relatedId || ""),
         metadata,
@@ -485,28 +481,9 @@ const findProductByRouteId = async (routeId, { populate = false } = {}) => {
   return query;
 };
 
-const uploadBufferToCloudinary = (buffer, filename) =>
-  new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: process.env.CLOUDINARY_CATALOG_FOLDER || "asian-import-export/catalog",
-        resource_type: "image",
-        overwrite: false,
-        quality: "auto:good",
-        fetch_format: "auto",
-      },
-      (error, result) => {
-        if (error) return reject(error);
-        resolve({
-          ...result,
-          optimizedUrl: buildOptimizedUrl(result.public_id, result.resource_type || "image"),
-          originalFilename: filename,
-        });
-      }
-    );
-
-    stream.end(buffer);
-  });
+// Store an uploaded buffer on the VPS disk and return a Cloudinary-shaped descriptor.
+const storeBufferToDisk = (buffer, filename, mimetype = "") =>
+  localStorage.saveBuffer(buffer, { originalname: filename, mimetype });
 
 const downloadUrlToBuffer = (urlString) =>
   new Promise((resolve, reject) => {
@@ -520,9 +497,10 @@ const downloadUrlToBuffer = (urlString) =>
           return reject(new Error(`Failed to download URL: HTTP ${response.statusCode}`));
         }
 
+        const mimetype = String(response.headers["content-type"] || "");
         const chunks = [];
         response.on("data", (chunk) => chunks.push(chunk));
-        response.on("end", () => resolve({ buffer: Buffer.concat(chunks), filename: basename }));
+        response.on("end", () => resolve({ buffer: Buffer.concat(chunks), filename: basename, mimetype }));
         response.on("error", reject);
       }).on("timeout", () => {
         reject(new Error("Download request timed out"));
@@ -975,7 +953,7 @@ const uploadMedia = async (req, res) => {
       return res.status(400).json({ success: false, message: "Image file is required" });
     }
 
-    const uploaded = await uploadBufferToCloudinary(req.file.buffer, req.file.originalname);
+    const uploaded = await storeBufferToDisk(req.file.buffer, req.file.originalname, req.file.mimetype);
     const metadata = req.body.metadata ? JSON.parse(req.body.metadata) : {};
 
     const media = await MediaAsset.create({
@@ -983,12 +961,12 @@ const uploadMedia = async (req, res) => {
       assetType: uploaded.resource_type || "image",
       format: uploaded.format || "",
       originalFilename: uploaded.originalFilename || req.file.originalname,
-      url: uploaded.secure_url,
+      url: uploaded.url,
       optimizedUrl: uploaded.optimizedUrl,
       bytes: uploaded.bytes || 0,
       width: uploaded.width || 0,
       height: uploaded.height || 0,
-      folder: uploaded.folder || process.env.CLOUDINARY_CATALOG_FOLDER || "asian-import-export/catalog",
+      folder: uploaded.folder || localStorage.DEFAULT_FOLDER,
       relatedType: req.body.relatedType || "",
       relatedId: req.body.relatedId || "",
       uploadedBy: {
@@ -1021,10 +999,10 @@ const uploadMediaFromUrl = async (req, res) => {
     }
 
     // Download URL to buffer
-    const { buffer, filename } = await downloadUrlToBuffer(imageUrl);
+    const { buffer, filename, mimetype } = await downloadUrlToBuffer(imageUrl);
 
-    // Upload buffer to Cloudinary
-    const uploaded = await uploadBufferToCloudinary(buffer, filename);
+    // Store buffer on the VPS disk
+    const uploaded = await storeBufferToDisk(buffer, filename, mimetype);
     const metadata = req.body.metadata ? JSON.parse(req.body.metadata) : {};
 
     // Create media record
@@ -1033,12 +1011,12 @@ const uploadMediaFromUrl = async (req, res) => {
       assetType: uploaded.resource_type || "image",
       format: uploaded.format || "",
       originalFilename: uploaded.originalFilename || filename,
-      url: uploaded.secure_url,
+      url: uploaded.url,
       optimizedUrl: uploaded.optimizedUrl,
       bytes: uploaded.bytes || 0,
       width: uploaded.width || 0,
       height: uploaded.height || 0,
-      folder: uploaded.folder || process.env.CLOUDINARY_CATALOG_FOLDER || "asian-import-export/catalog",
+      folder: uploaded.folder || localStorage.DEFAULT_FOLDER,
       relatedType: req.body.relatedType || "",
       relatedId: req.body.relatedId || "",
       uploadedBy: {
@@ -1068,7 +1046,7 @@ const deleteMedia = async (req, res) => {
       return res.status(404).json({ success: false, message: "Media not found" });
     }
 
-    await cloudinary.uploader.destroy(publicId, { resource_type: media.assetType || "image" });
+    await localStorage.deleteFile(publicId);
     await MediaAsset.deleteOne({ publicId });
 
     await Product.updateMany(

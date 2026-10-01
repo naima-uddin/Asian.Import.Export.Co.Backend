@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const nodemailer = require("nodemailer");
 const connectDB = require("./config/db");
+const { UPLOADS_ROOT, ensureUploadsRoot } = require("./config/localStorage");
 const seedDefaultAdmin = require("./config/seedDefaultAdmin");
 const userRoutes = require("./routes/userRoutes");
 const orderFlowRoutes = require("./routes/orderFlowRoutes");
@@ -100,6 +101,18 @@ app.use(
   }),
 );
 app.use(express.json());
+
+// Serve uploaded images from the VPS disk (images now live here, not Cloudinary).
+// Public URL: `${ASSET_BASE_URL}/uploads/<folder>/<file>`
+ensureUploadsRoot();
+app.use(
+  "/uploads",
+  express.static(UPLOADS_ROOT, {
+    maxAge: "30d",
+    immutable: true,
+    fallthrough: true,
+  }),
+);
 
 // User routes
 app.use("/api/users", userRoutes);

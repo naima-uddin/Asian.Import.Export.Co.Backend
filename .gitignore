@@ -2,3 +2,7 @@ node_modules
 .env
 .DS_Store
 dist
+
+# Uploaded images live on the VPS disk, not in git
+uploads/*
+!uploads/.gitkeep

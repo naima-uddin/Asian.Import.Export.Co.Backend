@@ -9,7 +9,7 @@ const {
   normalizeCategoryPayload,
   normalizeProductPayload,
 } = require("../controllers/catalogController");
-const { cloudinary, buildOptimizedUrl } = require("../config/cloudinary");
+const localStorage = require("../config/localStorage");
 
 const slugifyText = (value = "") =>
   String(value)
@@ -50,16 +50,13 @@ const uploadCatalogAsset = async (asset, fallbackName = "") => {
   const localPath = getFrontendAssetPath(sourcePath);
 
   try {
-    const uploaded = await cloudinary.uploader.upload(localPath, {
-      folder: process.env.CLOUDINARY_CATALOG_FOLDER || "asian-import-export/catalog",
-      resource_type: "image",
-      overwrite: false,
-      quality: "auto:good",
-      fetch_format: "auto",
+    // Copy the bundled asset onto the VPS disk byte-for-byte (no re-encoding).
+    const uploaded = await localStorage.saveLocalFile(localPath, {
+      originalname: fallbackName || path.basename(localPath),
     });
 
     return {
-      url: buildOptimizedUrl(uploaded.public_id, uploaded.resource_type || "image"),
+      url: uploaded.url,
       publicId: uploaded.public_id,
       alt: fallbackName,
       width: uploaded.width || 0,
@@ -133,7 +130,7 @@ const upsertImportedMediaAsset = async ({
         bytes: asset.bytes || 0,
         width: asset.width || 0,
         height: asset.height || 0,
-        folder: process.env.CLOUDINARY_CATALOG_FOLDER || "asian-import-export/catalog",
+        folder: localStorage.DEFAULT_FOLDER,
         relatedType,
         relatedId: String(relatedId || ""),
         metadata,
