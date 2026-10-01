@@ -89,7 +89,7 @@ const loadSettingsDoc = async () => SiteSettings.findOne().sort({ updatedAt: -1 
 
 const getSiteSettings = async (_req, res) => {
   try {
-    const latestSettings = await loadSettingsDoc().lean();
+    const latestSettings = await loadSettingsDoc();
     return res.status(200).json({
       success: true,
       settings: mergeSettings(latestSettings),
