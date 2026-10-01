@@ -3,9 +3,10 @@ const fsp = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
 
-// Root folder on the VPS where all uploaded images live.
-// Served statically at `${ASSET_BASE_URL}/uploads/...` (see index.js).
-const UPLOADS_ROOT = path.resolve(__dirname, "..", "uploads");
+// Root folder where all uploaded images live: backend/public/uploads.
+// Committed to git so images deploy with the code, and served statically at
+// `${ASSET_BASE_URL}/uploads/...` (see index.js).
+const UPLOADS_ROOT = path.resolve(__dirname, "..", "public", "uploads");
 
 const DEFAULT_FOLDER = process.env.LOCAL_UPLOAD_FOLDER || "catalog";
 
@@ -102,6 +103,31 @@ const saveBuffer = async (buffer, { originalname = "", mimetype = "", folder = D
   };
 };
 
+/**
+ * Save a buffer at an EXACT relative path (deterministic) under the uploads root,
+ * overwriting if present. Used by the migration so the same source always lands at
+ * the same file, letting a later DB-rewrite reuse already-downloaded files.
+ */
+const saveBufferAs = async (buffer, relativePath) => {
+  const target = resolveDiskPath(relativePath);
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await fsp.writeFile(target, buffer);
+  const clean = String(relativePath).replace(/^\/+/, "");
+  return {
+    public_id: clean,
+    publicId: clean,
+    url: buildUrlFromPublicId(clean),
+    secure_url: buildUrlFromPublicId(clean),
+    optimizedUrl: buildUrlFromPublicId(clean),
+    resource_type: "image",
+    format: path.extname(clean).replace(/^\./, ""),
+    bytes: buffer.length,
+    width: 0,
+    height: 0,
+    folder: path.dirname(clean),
+  };
+};
+
 // Copy an existing local file (e.g. a bundled /assets/... source) into the uploads dir.
 const saveLocalFile = async (sourcePath, { originalname = "", folder = DEFAULT_FOLDER } = {}) => {
   const buffer = await fsp.readFile(sourcePath);
@@ -140,6 +166,7 @@ module.exports = {
   buildUrlFromPublicId,
   resolveDiskPath,
   saveBuffer,
+  saveBufferAs,
   saveLocalFile,
   deleteFile,
   ensureUploadsRoot,

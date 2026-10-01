@@ -1,34 +1,39 @@
 /**
- * One-off migration: move every image currently referenced in the database
- * from Cloudinary (or any remote host) onto this VPS's local /uploads disk,
- * then rewrite the stored URLs/publicIds to point at the VPS.
+ * Migrate images referenced in the database from Cloudinary onto local
+ * `public/uploads/` disk storage, preserving ORIGINAL full quality.
  *
- * QUALITY GUARANTEE: for Cloudinary images we always fetch the ORIGINAL,
- * full-resolution asset (reconstructed from its publicId / stripped of any
- * resize+compress transformation), NEVER the optimized delivery URL. Files
- * are written to disk byte-for-byte with no re-encoding, so quality is
- * preserved exactly.
+ * THREE MODES — pick based on where you are in the rollout:
  *
- * COMPLETENESS GUARANTEE: every image reference across MediaAsset, Product
- * (image + images[]) and Category (image + subcategories[].image) is visited,
- * downloads are retried, and a final verification pass fails loudly if even a
- * single remote URL remains.
+ *   --download-only
+ *       Download every ORIGINAL Cloudinary image into public/uploads/ at a
+ *       DETERMINISTIC path and write a manifest. Does NOT touch the database.
+ *       Use this NOW (before the VPS/domain is live) so the files are ready and
+ *       can be committed to git. Safe: the live site keeps using Cloudinary.
  *
- * Usage (run from the backend folder, with .env configured):
- *   node scripts/migrateCloudinaryToLocal.js            # live migration
- *   node scripts/migrateCloudinaryToLocal.js --dry      # preview only, no writes
- *   node scripts/migrateCloudinaryToLocal.js --all      # migrate ALL remote URLs, not just cloudinary
+ *   --rewrite-db
+ *       Read the manifest produced above and rewrite the DB URLs/publicIds to
+ *       `${ASSET_BASE_URL}/uploads/...`. Does NOT re-download. Run this LATER,
+ *       once api.asianimportexport.com is live and serving /uploads.
  *
- * Requires in .env:  MONGODB_URI, ASSET_BASE_URL (e.g. https://api.asianimportexport.com)
- * Uses if present:   CLOUDINARY_CLOUD_NAME  (to rebuild original-quality URLs)
+ *   (no mode flag)  -> one-shot: download (random names) AND rewrite the DB in a
+ *       single pass. Use on the live VPS when you want to do everything at once.
  *
- * Safe to re-run: URLs already pointing at ASSET_BASE_URL/uploads are skipped.
+ * Extra flags:  --dry (preview, no writes)   --all (migrate any remote URL, not just Cloudinary)
+ *
+ * Requires in .env:  MONGODB_URI
+ *   --rewrite-db / one-shot also need:  ASSET_BASE_URL (e.g. https://api.asianimportexport.com)
+ *   Uses if present:  CLOUDINARY_CLOUD_NAME (to rebuild original-quality URLs)
+ *
+ * Safe to re-run. Idempotent.
  */
 
 require("dotenv").config();
 const https = require("https");
 const http = require("http");
 const path = require("path");
+const fs = require("fs");
+const fsp = require("fs/promises");
+const crypto = require("crypto");
 const mongoose = require("mongoose");
 
 const connectDB = require("../config/db");
@@ -39,27 +44,27 @@ const Category = require("../models/Category");
 
 const DRY_RUN = process.argv.includes("--dry");
 const MIGRATE_ALL = process.argv.includes("--all");
+const DOWNLOAD_ONLY = process.argv.includes("--download-only");
+const REWRITE_DB = process.argv.includes("--rewrite-db");
+const MODE = DOWNLOAD_ONLY ? "download" : REWRITE_DB ? "rewrite" : "oneshot";
 const MAX_RETRIES = 3;
 
 const ASSET_BASE = localStorage.getAssetBaseUrl();
 const CLOUD_NAME = String(process.env.CLOUDINARY_CLOUD_NAME || "").trim();
+const MANIFEST_PATH = path.join(localStorage.UPLOADS_ROOT, "migration-manifest.json");
+const MIGRATION_FOLDER = "catalog";
 
 const stats = {
   downloaded: 0,
-  reusedFromCache: 0,
+  reused: 0,
   skippedLocal: 0,
   skippedEmpty: 0,
   failed: 0,
   mediaUpdated: 0,
   productsUpdated: 0,
   categoriesUpdated: 0,
+  notInManifest: 0,
 };
-
-// Caches. Keyed by publicId when available (so the same image is fetched once
-// and every reference ends up pointing at the exact same local file), else url.
-const cache = new Map();
-// Original secure_url per publicId, harvested from MediaAsset (best source of truth).
-const mediaUrlByPublicId = new Map();
 
 const isRemote = (u = "") => /^https?:\/\//i.test(String(u).trim());
 const isAlreadyLocal = (u = "") => String(u || "").trim().startsWith(`${ASSET_BASE}/uploads/`);
@@ -68,53 +73,49 @@ const isCloudinary = (u = "") => /cloudinary\.com/i.test(String(u || ""));
 const needsMigration = (u = "") => {
   const url = String(u || "").trim();
   if (!url) return false;
-  if (!isRemote(url)) return false; // relative/empty -> leave as is
+  if (!isRemote(url)) return false;
   if (isAlreadyLocal(url)) return false;
   if (MIGRATE_ALL) return true;
   return isCloudinary(url);
 };
 
+// Stable identity for an asset, used as the manifest key + dedupe key.
+const assetKey = ({ publicId = "", url = "" }) => {
+  const pid = String(publicId || "").trim();
+  if (pid) return pid;
+  return String(url || "").trim().split("?")[0]; // strip query
+};
+
+const MIME_EXT = {
+  "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp",
+  "image/avif": "avif", "image/gif": "gif", "image/svg+xml": "svg", "image/bmp": "bmp", "image/tiff": "tiff",
+};
+const extFromMime = (m = "") => MIME_EXT[String(m).toLowerCase().split(";")[0].trim()] || "";
+
 // Turn a transformed Cloudinary delivery URL into its ORIGINAL (no transforms).
-// e.g. .../image/upload/f_auto,q_auto,c_limit,w_1600/v123/folder/name.jpg
-//   -> .../image/upload/v123/folder/name.jpg
 const stripCloudinaryTransforms = (u = "") => {
-  const m = String(u).match(
-    /^(https?:\/\/res\.cloudinary\.com\/[^/]+\/(?:image|video|raw)\/upload\/)(.*)$/i,
-  );
+  const m = String(u).match(/^(https?:\/\/res\.cloudinary\.com\/[^/]+\/(?:image|video|raw)\/upload\/)(.*)$/i);
   if (!m) return u;
   const segments = m[2].split("/");
-  // Drop leading transformation segments (contain "<letter>_<value>" params),
-  // but never drop the version marker (v123...) or the public id itself.
-  while (
-    segments.length > 1 &&
-    !/^v\d+$/i.test(segments[0]) &&
-    /(^|,)[a-z]{1,3}_/i.test(segments[0])
-  ) {
+  while (segments.length > 1 && !/^v\d+$/i.test(segments[0]) && /(^|,)[a-z]{1,3}_/i.test(segments[0])) {
     segments.shift();
   }
   return m[1] + segments.join("/");
 };
 
-// Build the best candidate URLs for the ORIGINAL asset, most-reliable first.
+// Best candidate URLs for the ORIGINAL asset, most-reliable first.
 const originalCandidates = ({ url = "", publicId = "", format = "" } = {}) => {
   const candidates = [];
-  // 1. Reconstruct straight from publicId + cloud name (guaranteed original).
   if (publicId && CLOUD_NAME && !isRemote(publicId)) {
     const base = `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/${publicId}`;
     if (format) candidates.push(`${base}.${format}`);
-    candidates.push(base); // extension-less: Cloudinary serves native original
+    candidates.push(base);
   }
-  // 2. Strip transforms from the stored (optimized) URL.
-  if (isCloudinary(url)) {
-    candidates.push(stripCloudinaryTransforms(url));
-  }
-  // 3. Last resort: the URL exactly as stored.
+  if (isCloudinary(url)) candidates.push(stripCloudinaryTransforms(url));
   if (url) candidates.push(url);
-  // De-dupe, keep order.
   return [...new Set(candidates.filter(Boolean))];
 };
 
-// Download a single URL to a buffer, following a few redirects.
 const downloadOnce = (urlString, redirects = 0) =>
   new Promise((resolve, reject) => {
     if (redirects > 5) return reject(new Error("Too many redirects"));
@@ -126,27 +127,21 @@ const downloadOnce = (urlString, redirects = 0) =>
     }
     const protocol = parsed.protocol === "https:" ? https : http;
     const basename = path.basename(parsed.pathname || "image.jpg") || "image.jpg";
-
     protocol
       .get(urlString, { timeout: 30000 }, (response) => {
         const { statusCode, headers } = response;
         if (statusCode >= 300 && statusCode < 400 && headers.location) {
           response.resume();
-          const next = new URL(headers.location, urlString).toString();
-          return resolve(downloadOnce(next, redirects + 1));
+          return resolve(downloadOnce(new URL(headers.location, urlString).toString(), redirects + 1));
         }
         if (statusCode !== 200) {
           response.resume();
           return reject(new Error(`HTTP ${statusCode}`));
         }
         const chunks = [];
-        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("data", (c) => chunks.push(c));
         response.on("end", () =>
-          resolve({
-            buffer: Buffer.concat(chunks),
-            filename: basename,
-            mimetype: String(headers["content-type"] || ""),
-          }),
+          resolve({ buffer: Buffer.concat(chunks), filename: basename, mimetype: String(headers["content-type"] || "") }),
         );
         response.on("error", reject);
       })
@@ -156,7 +151,6 @@ const downloadOnce = (urlString, redirects = 0) =>
       .on("error", reject);
   });
 
-// Try a list of candidate URLs, each with retries. Returns the first success.
 const downloadFirstAvailable = async (candidates) => {
   let lastError = null;
   for (const candidate of candidates) {
@@ -171,32 +165,201 @@ const downloadFirstAvailable = async (candidates) => {
       }
     }
   }
-  throw lastError || new Error("No candidates to download");
+  throw lastError || new Error("No candidates");
 };
 
-// Fetch (or reuse) the original image for an asset, saving it to the VPS.
-// Returns { url, publicId, format } for the new local copy.
-const migrateAssetSource = async ({ url = "", publicId = "", format = "" }) => {
-  // Prefer the original secure_url recorded in MediaAsset for this publicId.
-  const mediaOriginal = publicId ? mediaUrlByPublicId.get(publicId) : "";
-  const cacheKey = publicId || url;
+// ---- Deterministic local path (download + rewrite agree via the manifest) ----
+const usedLocalIds = new Set();
+const buildLocalPublicId = (key, ext) => {
+  let leaf = String(key).split("/").pop().split("?")[0].replace(/[^a-z0-9_-]/gi, "").toLowerCase();
+  if (!leaf) leaf = crypto.createHash("md5").update(String(key)).digest("hex").slice(0, 16);
+  const safeExt = (ext || "jpg").replace(/^\./, "");
+  let rel = `${MIGRATION_FOLDER}/${leaf}.${safeExt}`;
+  if (usedLocalIds.has(rel)) {
+    const h = crypto.createHash("md5").update(String(key)).digest("hex").slice(0, 6);
+    rel = `${MIGRATION_FOLDER}/${leaf}-${h}.${safeExt}`;
+  }
+  usedLocalIds.add(rel);
+  return rel;
+};
 
-  if (cache.has(cacheKey)) {
-    stats.reusedFromCache += 1;
-    return cache.get(cacheKey);
+// ---------- Collect every asset reference across the DB ----------
+const collectReferences = async () => {
+  const refs = []; // { source: {url, publicId, format}, apply: (localPublicId) => void (mutates doc), doc }
+  const media = await MediaAsset.find({});
+  const products = await Product.find({});
+  const categories = await Category.find({});
+  return { media, products, categories, refs };
+};
+
+// Build the set of unique sources that need migrating (for --download-only).
+const gatherUniqueSources = ({ media, products, categories }) => {
+  const map = new Map(); // key -> {url, publicId, format}
+  const consider = (asset) => {
+    if (!asset) return;
+    const url = String(asset.url || "").trim();
+    if (!url) {
+      stats.skippedEmpty += 1;
+      return;
+    }
+    if (!needsMigration(url)) {
+      if (isAlreadyLocal(url)) stats.skippedLocal += 1;
+      return;
+    }
+    const key = assetKey({ publicId: asset.publicId, url });
+    if (!map.has(key)) {
+      map.set(key, { url, publicId: String(asset.publicId || "").trim(), format: String(asset.format || "").trim() });
+    }
+  };
+  media.forEach((m) => consider({ url: m.url || m.optimizedUrl, publicId: m.publicId, format: m.format }));
+  products.forEach((p) => {
+    consider(p.image);
+    (p.images || []).forEach(consider);
+  });
+  categories.forEach((c) => {
+    consider(c.image);
+    (c.subcategories || []).forEach((s) => consider(s.image));
+  });
+  return map;
+};
+
+// =================== MODE: download-only ===================
+const runDownloadOnly = async ({ media, products, categories }) => {
+  const sources = gatherUniqueSources({ media, products, categories });
+  console.log(`\nUnique Cloudinary images to download: ${sources.size}`);
+
+  const manifest = { generatedAt: new Date().toISOString(), cloudName: CLOUD_NAME, entries: {} };
+  // Reuse an existing manifest so re-runs don't re-download.
+  if (fs.existsSync(MANIFEST_PATH)) {
+    try {
+      const prev = JSON.parse(await fsp.readFile(MANIFEST_PATH, "utf8"));
+      Object.assign(manifest.entries, prev.entries || {});
+      Object.values(manifest.entries).forEach((e) => e.localPublicId && usedLocalIds.add(e.localPublicId));
+    } catch (_e) {
+      /* ignore */
+    }
   }
 
-  const candidates = originalCandidates({
-    url: mediaOriginal && !isAlreadyLocal(mediaOriginal) ? mediaOriginal : url,
-    publicId,
-    format,
-  });
+  let i = 0;
+  for (const [key, source] of sources) {
+    i += 1;
+    const existing = manifest.entries[key];
+    if (existing && existing.localPublicId && fs.existsSync(path.join(localStorage.UPLOADS_ROOT, existing.localPublicId))) {
+      stats.reused += 1;
+      continue;
+    }
+    try {
+      const { buffer, mimetype } = await downloadFirstAvailable(originalCandidates(source));
+      const ext = source.format || extFromMime(mimetype) || "jpg";
+      const localPublicId = (existing && existing.localPublicId) || buildLocalPublicId(key, ext);
+      if (!DRY_RUN) await localStorage.saveBufferAs(buffer, localPublicId);
+      manifest.entries[key] = { localPublicId, format: ext, bytes: buffer.length };
+      stats.downloaded += 1;
+      if (i % 50 === 0) console.log(`  ...${i}/${sources.size}`);
+    } catch (error) {
+      stats.failed += 1;
+      console.warn(`  FAILED: ${key}\n    -> ${error.message}`);
+    }
+  }
 
-  const { buffer, filename, mimetype } = await downloadFirstAvailable(candidates);
+  if (!DRY_RUN) {
+    await fsp.mkdir(path.dirname(MANIFEST_PATH), { recursive: true });
+    await fsp.writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2));
+    console.log(`\nManifest written: ${MANIFEST_PATH} (${Object.keys(manifest.entries).length} entries)`);
+  }
+  console.log("\nDB was NOT modified. Files are in public/uploads/ — commit them, then run --rewrite-db once the VPS is live.");
+};
 
+// =================== MODE: rewrite-db ===================
+const loadManifest = async () => {
+  if (!fs.existsSync(MANIFEST_PATH)) {
+    throw new Error(`Manifest not found at ${MANIFEST_PATH}. Run --download-only first.`);
+  }
+  const parsed = JSON.parse(await fsp.readFile(MANIFEST_PATH, "utf8"));
+  return parsed.entries || {};
+};
+
+const applyFromManifest = (asset, entries) => {
+  if (!asset) return false;
+  const url = String(asset.url || "").trim();
+  if (!url || !needsMigration(url)) return false;
+  const key = assetKey({ publicId: asset.publicId, url });
+  const entry = entries[key];
+  if (!entry || !entry.localPublicId) {
+    stats.notInManifest += 1;
+    console.warn(`  not in manifest: ${key}`);
+    return false;
+  }
+  asset.url = localStorage.buildUrlFromPublicId(entry.localPublicId);
+  asset.publicId = entry.localPublicId;
+  if ("format" in asset && entry.format) asset.format = entry.format;
+  if ("optimizedUrl" in asset) asset.optimizedUrl = asset.url;
+  return true;
+};
+
+const runRewriteDb = async ({ media, products, categories }) => {
+  const entries = await loadManifest();
+  console.log(`\nManifest entries: ${Object.keys(entries).length}`);
+  console.log(`Rewriting DB URLs to base: ${ASSET_BASE}`);
+
+  for (const doc of media) {
+    const fakeAsset = { url: doc.url || doc.optimizedUrl, publicId: doc.publicId, format: doc.format, optimizedUrl: doc.optimizedUrl };
+    if (applyFromManifest(fakeAsset, entries)) {
+      if (!DRY_RUN) {
+        doc.url = fakeAsset.url;
+        doc.optimizedUrl = fakeAsset.url;
+        doc.publicId = fakeAsset.publicId;
+        if (fakeAsset.format) doc.format = fakeAsset.format;
+        doc.folder = MIGRATION_FOLDER;
+        await doc.save();
+      }
+      stats.mediaUpdated += 1;
+    }
+  }
+  for (const doc of products) {
+    let changed = false;
+    if (applyFromManifest(doc.image, entries)) changed = true;
+    (doc.images || []).forEach((img) => {
+      if (applyFromManifest(img, entries)) changed = true;
+    });
+    if (changed) {
+      if (!DRY_RUN) {
+        doc.markModified("image");
+        doc.markModified("images");
+        await doc.save();
+      }
+      stats.productsUpdated += 1;
+    }
+  }
+  for (const doc of categories) {
+    let changed = false;
+    if (applyFromManifest(doc.image, entries)) changed = true;
+    (doc.subcategories || []).forEach((s) => {
+      if (applyFromManifest(s.image, entries)) changed = true;
+    });
+    if (changed) {
+      if (!DRY_RUN) {
+        doc.markModified("image");
+        doc.markModified("subcategories");
+        await doc.save();
+      }
+      stats.categoriesUpdated += 1;
+    }
+  }
+};
+
+// =================== MODE: one-shot (download + rewrite together) ===================
+const cache = new Map();
+const migrateAssetSource = async ({ url = "", publicId = "", format = "" }) => {
+  const cacheKey = publicId || url;
+  if (cache.has(cacheKey)) {
+    stats.reused += 1;
+    return cache.get(cacheKey);
+  }
+  const { buffer, filename, mimetype } = await downloadFirstAvailable(originalCandidates({ url, publicId, format }));
   let descriptor;
   if (DRY_RUN) {
-    descriptor = { url: `[DRY] would-save (${buffer.length} bytes)`, publicId: "[dry]", format: "" };
+    descriptor = { url: "[DRY]", publicId: "[dry]", format: "" };
   } else {
     const originalName = (publicId && path.basename(publicId)) || filename;
     const saved = await localStorage.saveBuffer(buffer, { originalname: originalName, mimetype });
@@ -206,8 +369,6 @@ const migrateAssetSource = async ({ url = "", publicId = "", format = "" }) => {
   stats.downloaded += 1;
   return descriptor;
 };
-
-// Migrate one {url, publicId, format?, optimizedUrl?} asset object in place.
 const migrateAsset = async (asset) => {
   if (!asset) return false;
   const current = String(asset.url || "").trim();
@@ -220,15 +381,8 @@ const migrateAsset = async (asset) => {
     return false;
   }
   try {
-    const next = await migrateAssetSource({
-      url: current,
-      publicId: String(asset.publicId || "").trim(),
-      format: String(asset.format || "").trim(),
-    });
-    if (DRY_RUN) {
-      console.log(`  would migrate: ${current}`);
-      return true;
-    }
+    const next = await migrateAssetSource({ url: current, publicId: String(asset.publicId || "").trim(), format: String(asset.format || "").trim() });
+    if (DRY_RUN) return true;
     asset.url = next.url;
     asset.publicId = next.publicId;
     if ("format" in asset && next.format) asset.format = next.format;
@@ -240,60 +394,33 @@ const migrateAsset = async (asset) => {
     return false;
   }
 };
-
-// Build the publicId -> original secure_url map from MediaAsset first.
-const indexMediaOriginals = async () => {
-  const docs = await MediaAsset.find({}).select("publicId url optimizedUrl").lean();
-  for (const doc of docs) {
-    // Prefer url (secure_url / original) over optimizedUrl.
-    const original = isCloudinary(doc.url) ? doc.url : doc.optimizedUrl || doc.url;
-    if (doc.publicId && original) mediaUrlByPublicId.set(doc.publicId, original);
-  }
-};
-
-const migrateMediaAssets = async () => {
-  const docs = await MediaAsset.find({});
-  console.log(`\nMediaAsset: ${docs.length} record(s)`);
-  for (const doc of docs) {
-    const source = String(doc.url || doc.optimizedUrl || "").trim();
-    if (!needsMigration(source)) {
-      if (isAlreadyLocal(source)) stats.skippedLocal += 1;
+const runOneShot = async ({ media, products, categories }) => {
+  for (const doc of media) {
+    const src = String(doc.url || doc.optimizedUrl || "").trim();
+    if (!needsMigration(src)) {
+      if (isAlreadyLocal(src)) stats.skippedLocal += 1;
       continue;
     }
     try {
-      const next = await migrateAssetSource({
-        url: source,
-        publicId: String(doc.publicId || "").trim(),
-        format: String(doc.format || "").trim(),
-      });
-      if (DRY_RUN) {
-        console.log(`  would migrate media: ${source}`);
-        stats.mediaUpdated += 1;
-        continue;
+      const next = await migrateAssetSource({ url: src, publicId: String(doc.publicId || "").trim(), format: String(doc.format || "").trim() });
+      if (!DRY_RUN) {
+        doc.url = next.url;
+        doc.optimizedUrl = next.url;
+        doc.publicId = next.publicId;
+        if (next.format) doc.format = next.format;
+        doc.folder = MIGRATION_FOLDER;
+        await doc.save();
       }
-      doc.url = next.url;
-      doc.optimizedUrl = next.url;
-      doc.publicId = next.publicId;
-      if (next.format) doc.format = next.format;
-      doc.folder = localStorage.DEFAULT_FOLDER;
-      await doc.save();
       stats.mediaUpdated += 1;
     } catch (error) {
       stats.failed += 1;
-      console.warn(`  FAILED media: ${source}\n    -> ${error.message}`);
+      console.warn(`  FAILED media: ${src}\n    -> ${error.message}`);
     }
   }
-};
-
-const migrateProducts = async () => {
-  const docs = await Product.find({});
-  console.log(`\nProduct: ${docs.length} record(s)`);
-  for (const doc of docs) {
+  for (const doc of products) {
     let changed = false;
     if (await migrateAsset(doc.image)) changed = true;
-    for (const img of doc.images || []) {
-      if (await migrateAsset(img)) changed = true;
-    }
+    for (const img of doc.images || []) if (await migrateAsset(img)) changed = true;
     if (changed) {
       if (!DRY_RUN) {
         doc.markModified("image");
@@ -303,17 +430,10 @@ const migrateProducts = async () => {
       stats.productsUpdated += 1;
     }
   }
-};
-
-const migrateCategories = async () => {
-  const docs = await Category.find({});
-  console.log(`\nCategory: ${docs.length} record(s)`);
-  for (const doc of docs) {
+  for (const doc of categories) {
     let changed = false;
     if (await migrateAsset(doc.image)) changed = true;
-    for (const sub of doc.subcategories || []) {
-      if (await migrateAsset(sub.image)) changed = true;
-    }
+    for (const s of doc.subcategories || []) if (await migrateAsset(s.image)) changed = true;
     if (changed) {
       if (!DRY_RUN) {
         doc.markModified("image");
@@ -325,15 +445,14 @@ const migrateCategories = async () => {
   }
 };
 
-// Final safety net: re-read everything and report any remaining remote URL.
+// Verification: no remote URL should remain (only meaningful after a DB write).
 const verifyNoneMissed = async () => {
-  if (DRY_RUN) return 0;
+  if (DRY_RUN || MODE === "download") return 0;
   const remaining = [];
   const check = (u, where) => {
     const url = String(u || "").trim();
     if (url && needsMigration(url)) remaining.push(`${where}: ${url}`);
   };
-
   for (const doc of await MediaAsset.find({}).lean()) check(doc.url, `MediaAsset ${doc._id}`);
   for (const doc of await Product.find({}).lean()) {
     check(doc.image?.url, `Product ${doc._id} image`);
@@ -341,16 +460,13 @@ const verifyNoneMissed = async () => {
   }
   for (const doc of await Category.find({}).lean()) {
     check(doc.image?.url, `Category ${doc._id} image`);
-    (doc.subcategories || []).forEach((sub, i) =>
-      check(sub?.image?.url, `Category ${doc._id} subcategories[${i}]`),
-    );
+    (doc.subcategories || []).forEach((s, i) => check(s?.image?.url, `Category ${doc._id} sub[${i}]`));
   }
-
   if (remaining.length) {
     console.log("\n⚠  VERIFICATION: these references still point at a remote host:");
-    remaining.forEach((line) => console.log(`   - ${line}`));
+    remaining.forEach((l) => console.log(`   - ${l}`));
   } else {
-    console.log("\n✓ VERIFICATION: no remote image references remain — nothing was missed.");
+    console.log("\n✓ VERIFICATION: no remote image references remain.");
   }
   return remaining.length;
 };
@@ -361,19 +477,22 @@ const run = async () => {
     process.exit(1);
   }
   console.log("=".repeat(64));
-  console.log(DRY_RUN ? "DRY RUN — no files written, no DB writes" : "LIVE migration");
+  console.log(`Mode            : ${MODE}${DRY_RUN ? " (DRY RUN)" : ""}`);
   console.log(`Target base URL : ${ASSET_BASE}`);
-  console.log(`Cloudinary cloud: ${CLOUD_NAME || "(unknown — will strip transforms from stored URLs)"}`);
+  console.log(`Cloudinary cloud: ${CLOUD_NAME || "(unknown)"}`);
   console.log(`Matching        : ${MIGRATE_ALL ? "ALL remote URLs" : "Cloudinary URLs only"}`);
+  console.log(`Uploads root    : ${localStorage.UPLOADS_ROOT}`);
   console.log("=".repeat(64));
 
   await connectDB();
   localStorage.ensureUploadsRoot();
 
-  await indexMediaOriginals();
-  await migrateMediaAssets();
-  await migrateProducts();
-  await migrateCategories();
+  const data = await collectReferences();
+  console.log(`\nRecords: MediaAsset=${data.media.length}, Product=${data.products.length}, Category=${data.categories.length}`);
+
+  if (MODE === "download") await runDownloadOnly(data);
+  else if (MODE === "rewrite") await runRewriteDb(data);
+  else await runOneShot(data);
 
   console.log("\n" + "=".repeat(64));
   console.log("Summary");
@@ -385,11 +504,8 @@ const run = async () => {
   await mongoose.connection.close();
   console.log("\nDone. MongoDB connection closed.");
 
-  if (stats.failed > 0 || missed > 0) {
-    console.log(
-      `\n⚠  ${stats.failed} download failure(s), ${missed} reference(s) still remote.` +
-        `\n   Re-run the script to retry — it is safe and idempotent.`,
-    );
+  if (stats.failed > 0 || missed > 0 || stats.notInManifest > 0) {
+    console.log(`\n⚠  failures=${stats.failed}, stillRemote=${missed}, notInManifest=${stats.notInManifest}. Re-run to retry (idempotent).`);
     process.exit(2);
   }
   process.exit(0);
