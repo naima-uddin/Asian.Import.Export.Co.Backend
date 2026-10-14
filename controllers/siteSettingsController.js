@@ -1,11 +1,17 @@
 const multer = require("multer");
 const SiteSettings = require("../models/SiteSettings");
 const localStorage = require("../config/localStorage");
+const { cloudinary } = require("../config/cloudinary");
 
 const BRANDING_FOLDER = "branding";
 const HOME_SLIDES_FOLDER = "home-slides";
 
 const upload = multer({ storage: multer.memoryStorage() });
+const hasCloudinaryConfig = Boolean(
+  process.env.CLOUDINARY_CLOUD_NAME &&
+    process.env.CLOUDINARY_API_KEY &&
+    process.env.CLOUDINARY_API_SECRET,
+);
 
 const cleanText = (value) =>
   value === undefined || value === null ? undefined : String(value).trim();
@@ -87,6 +93,44 @@ const mergeSettings = (source = {}, fallback = defaultSiteSettings()) => ({
 
 const loadSettingsDoc = async () => SiteSettings.findOne().sort({ updatedAt: -1 });
 
+const saveUploadedAsset = async (file, folder) => {
+  if (!hasCloudinaryConfig) {
+    if (process.env.VERCEL) {
+      throw new Error(
+        "Persistent image storage is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.",
+      );
+    }
+
+    return localStorage.saveBuffer(file.buffer, {
+      originalname: file.originalname || folder,
+      mimetype: file.mimetype,
+      folder,
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder, resource_type: "image" },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve(result);
+      },
+    );
+    stream.end(file.buffer);
+  });
+};
+
+const deleteUploadedAsset = async (media = {}) => {
+  if (!media?.publicId) return;
+
+  if (/cloudinary\.com/i.test(String(media.url || ""))) {
+    await cloudinary.uploader.destroy(media.publicId, { resource_type: "image" });
+    return;
+  }
+
+  await localStorage.deleteFile(media.publicId);
+};
+
 const getSiteSettings = async (_req, res) => {
   try {
     const latestSettings = await loadSettingsDoc();
@@ -144,14 +188,9 @@ const uploadBrandingAsset = (assetType) => async (req, res) => {
         .json({ success: false, message: "Image file is required" });
     }
 
-    const uploaded = await localStorage.saveBuffer(req.file.buffer, {
-      originalname: req.file.originalname || assetType,
-      mimetype: req.file.mimetype,
-      folder: BRANDING_FOLDER,
-    });
-
     const existing = await loadSettingsDoc();
-    const previousPublicId = existing?.branding?.[assetType]?.publicId;
+    const previousMedia = existing?.branding?.[assetType];
+    const uploaded = await saveUploadedAsset(req.file, BRANDING_FOLDER);
 
     const base = existing ? existing.toObject() : defaultSiteSettings();
     const merged = mergeSettings(base);
@@ -167,8 +206,13 @@ const uploadBrandingAsset = (assetType) => async (req, res) => {
     await updatedSettings.save();
 
     // Remove the old file from disk (best-effort, never blocks the response).
-    if (previousPublicId && previousPublicId !== uploaded.public_id) {
-      localStorage.deleteFile(previousPublicId).catch(() => {});
+    if (
+      previousMedia?.publicId &&
+      previousMedia.publicId !== uploaded.public_id
+    ) {
+      deleteUploadedAsset(previousMedia).catch((deleteError) => {
+        console.error(`Delete previous ${assetType} error:`, deleteError);
+      });
     }
 
     return res.status(200).json({
@@ -209,11 +253,7 @@ const addHomeSlide = async (req, res) => {
         .json({ success: false, message: "Image file is required" });
     }
 
-    const uploaded = await localStorage.saveBuffer(req.file.buffer, {
-      originalname: req.file.originalname || "slide",
-      mimetype: req.file.mimetype,
-      folder: HOME_SLIDES_FOLDER,
-    });
+    const uploaded = await saveUploadedAsset(req.file, HOME_SLIDES_FOLDER);
 
     const existing = await loadSettingsDoc();
     const current = existing?.homeSlides || [];
@@ -250,12 +290,15 @@ const deleteHomeSlide = async (req, res) => {
 
     const existing = await loadSettingsDoc();
     const current = existing?.homeSlides || [];
+    const removedSlide = current.find((slide) => slide.publicId === publicId);
     const nextSlides = current.filter((slide) => slide.publicId !== publicId);
 
     const settings = await saveSlides(nextSlides);
 
     // Best-effort file removal.
-    localStorage.deleteFile(publicId).catch(() => {});
+    deleteUploadedAsset(removedSlide || { publicId }).catch((deleteError) => {
+      console.error("Delete home slide asset error:", deleteError);
+    });
 
     return res.status(200).json({
       success: true,
