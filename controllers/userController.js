@@ -94,12 +94,19 @@ const registerUser = async (req, res) => {
 
     if (user) {
       // Update existing user
-      user.companyName = companyName || user.companyName;
-      user.fullName = fullName || user.fullName;
-      user.whatsappNumber = whatsappNumber || user.whatsappNumber;
-      user.country = country || user.country;
+      // Social sign-in is an authentication sync, not a profile replacement.
+      // Keep the customer-entered dashboard data when Google is linked later.
+      if (provider !== "google") {
+        user.companyName = companyName || user.companyName;
+        user.fullName = fullName || user.fullName;
+        user.whatsappNumber = whatsappNumber || user.whatsappNumber;
+        user.country = country || user.country;
+        user.businessType = resolveBusinessType(
+          businessType,
+          user.businessType || "Other",
+        );
+      }
       user.photoURL = photoURL || user.photoURL;
-      user.businessType = resolveBusinessType(businessType, user.businessType || "Other");
       if (provider) user.provider = provider;
       user.role = normalizeRole(user.role);
 

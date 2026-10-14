@@ -1053,8 +1053,16 @@ const placeOrderInquiry = async (req, res) => {
 
 const getMyInquiries = async (req, res) => {
   try {
+    const accountEmail = String(req.authUser?.email || "").trim().toLowerCase();
+    const ownershipQuery = [
+      { customer: req.authUser._id },
+      ...(accountEmail
+        ? [{ "customerSnapshot.email": accountEmail }]
+        : []),
+    ];
+
     const inquiries = await Inquiry.find({
-      customer: req.authUser._id,
+      $or: ownershipQuery,
       hiddenByCustomer: { $ne: true },
     })
       .sort({ createdAt: -1 })
@@ -1369,7 +1377,12 @@ const downloadInvoicePdf = async (req, res) => {
       return res.status(404).json({ success: false, message: "Invoice not found" });
     }
 
-    const isOwner = String(invoice.customer) === String(req.authUser?._id);
+    const accountEmail = String(req.authUser?.email || "").trim().toLowerCase();
+    const isOwner =
+      String(invoice.customer) === String(req.authUser?._id) ||
+      (accountEmail &&
+        String(invoice.customerSnapshot?.email || "").trim().toLowerCase() ===
+          accountEmail);
     const isStaff = isStaffRole(req.authUser?.role);
 
     if (!isOwner && !isStaff) {
@@ -1401,7 +1414,16 @@ const getMyInvoices = async (req, res) => {
       }
     }
 
-    const invoices = await Invoice.find({ customer: customerId }).sort({ createdAt: -1 }).lean();
+    const accountEmail = String(req.authUser?.email || "").trim().toLowerCase();
+    const ownershipQuery = [
+      { customer: customerId },
+      ...(accountEmail
+        ? [{ "customerSnapshot.email": accountEmail }]
+        : []),
+    ];
+    const invoices = await Invoice.find({ $or: ownershipQuery })
+      .sort({ createdAt: -1 })
+      .lean();
 
     return res.status(200).json({
       success: true,
